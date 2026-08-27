@@ -1,5 +1,7 @@
 package vt
 
+import "unicode/utf8"
+
 type Cell struct {
 	Ch   rune
 	FG   int
@@ -22,6 +24,7 @@ type Screen struct {
 	csiBuf   []byte
 	oscBuf   []byte
 	inEscape byte
+	utf8Buf  []byte
 }
 
 type parseState int
@@ -65,6 +68,7 @@ func (s *Screen) Clone() *Screen {
 	}
 	c.csiBuf = append([]byte(nil), s.csiBuf...)
 	c.oscBuf = append([]byte(nil), s.oscBuf...)
+	c.utf8Buf = append([]byte(nil), s.utf8Buf...)
 	return &c
 }
 
@@ -88,6 +92,37 @@ func (s *Screen) feed(b byte) {
 }
 
 func (s *Screen) feedNormal(b byte) {
+	// A byte >= 0x80, or any byte while a multi-byte sequence is already
+	// in progress, is UTF-8 continuation/lead data, not a control code or
+	// a printable ASCII character on its own. Box-drawing borders, nerd
+	// font icons, and anything else outside ASCII are 2-4 bytes each; the
+	// old code fed every byte straight to putRune as its own rune, which
+	// shredded each real character into that many garbage ones.
+	if len(s.utf8Buf) > 0 {
+		// A byte that isn't a valid continuation byte (0x80-0xBF) means the
+		// sequence in progress was truncated or corrupted. Drop it and
+		// reprocess b as if the buffer had been empty, rather than folding
+		// an unrelated byte (possibly an ESC) into a doomed decode.
+		if b < 0x80 || b > 0xbf {
+			s.utf8Buf = s.utf8Buf[:0]
+		} else {
+			s.utf8Buf = append(s.utf8Buf, b)
+			if !utf8.FullRune(s.utf8Buf) {
+				return
+			}
+			r, size := utf8.DecodeRune(s.utf8Buf)
+			s.utf8Buf = s.utf8Buf[:0]
+			if r != utf8.RuneError || size > 1 {
+				s.putRune(r)
+			}
+			return
+		}
+	}
+	if b >= 0x80 {
+		s.utf8Buf = append(s.utf8Buf, b)
+		return
+	}
+
 	switch b {
 	case 0x1b:
 		s.state = stateEscape

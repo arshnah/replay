@@ -14,6 +14,39 @@ func gridText(s *Screen) [][]rune {
 	return out
 }
 
+func TestMultiByteUTF8DecodesToOneRune(t *testing.T) {
+	s := NewScreen(20, 3)
+	// U+250C (BOX DRAWINGS LIGHT DOWN AND RIGHT, 3 bytes in UTF-8) and
+	// U+F0107 (a nerd-font private-use icon, 4 bytes in UTF-8). Before the
+	// fix, feedNormal fed each raw byte to putRune independently, so a
+	// single character like this became 3-4 garbage runes instead of one.
+	s.Write([]byte("a┌b\U000F0107c"))
+	got := gridText(s)[0][:5]
+	want := []rune{'a', '┌', 'b', '\U000F0107', 'c'}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("cell %d: got %q (%U), want %q (%U)\nfull row: %q", i, got[i], got[i], want[i], want[i], got)
+		}
+	}
+	if s.CursorX != 5 {
+		t.Fatalf("cursor at %d, want 5 (one column per decoded rune, not per byte)", s.CursorX)
+	}
+}
+
+func TestTruncatedUTF8SequenceIsDroppedNotMisdecoded(t *testing.T) {
+	s := NewScreen(20, 3)
+	// The first two bytes of a 3-byte sequence, then a plain ASCII byte
+	// that is not a valid continuation byte. The partial sequence must be
+	// dropped, not folded into a garbage decode with the following byte.
+	full := []byte("┌")
+	s.Write(full[:2])
+	s.Write([]byte("x"))
+	got := gridText(s)[0][0]
+	if got != 'x' {
+		t.Fatalf("got %q (%U), want 'x': truncated sequence should be dropped cleanly", got, got)
+	}
+}
+
 func TestAPCSequenceDoesNotLeakIntoGrid(t *testing.T) {
 	s := NewScreen(20, 3)
 	// kitty's terminal graphics protocol: ESC _ G <base64 payload> ESC \
