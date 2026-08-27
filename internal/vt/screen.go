@@ -140,7 +140,14 @@ func (s *Screen) feedEscape(b byte) {
 	case '[':
 		s.state = stateCSI
 		s.csiBuf = s.csiBuf[:0]
-	case ']':
+	case ']', '_', 'P', '^', 'X':
+		// OSC (]), APC (_), DCS (P), PM (^) and SOS (X) are all
+		// string-terminated the same way (ST = ESC \, some also accept
+		// BEL). None of their payloads are rendered, so they all just
+		// discard bytes until termination. Without this, an unsupported
+		// one (APC is how kitty's terminal graphics protocol embeds a
+		// base64 image) falls through to stateNormal below and every byte
+		// of its payload gets printed as a literal character.
 		s.state = stateOSC
 		s.oscBuf = s.oscBuf[:0]
 	case '7':

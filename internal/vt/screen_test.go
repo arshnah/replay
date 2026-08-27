@@ -14,6 +14,36 @@ func gridText(s *Screen) [][]rune {
 	return out
 }
 
+func TestAPCSequenceDoesNotLeakIntoGrid(t *testing.T) {
+	s := NewScreen(20, 3)
+	// kitty's terminal graphics protocol: ESC _ G <base64 payload> ESC \
+	// Before the fix, ESC _ fell through to stateNormal and every byte of
+	// the payload printed as a literal character.
+	s.Write([]byte("before"))
+	s.Write([]byte("\x1b_Gf=100,a=T;iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB\x1b\\"))
+	s.Write([]byte("after"))
+
+	if s.CursorX != len("beforeafter") || s.CursorY != 0 {
+		t.Fatalf("expected only 'beforeafter' to advance the cursor, got (%d,%d)", s.CursorX, s.CursorY)
+	}
+	got := string(gridText(s)[0])
+	want := "beforeafter         "
+	if got != want {
+		t.Fatalf("APC payload leaked into the grid:\ngot  %q\nwant %q", got, want)
+	}
+}
+
+func TestDCSSequenceDoesNotLeakIntoGrid(t *testing.T) {
+	s := NewScreen(10, 3)
+	s.Write([]byte("hi"))
+	s.Write([]byte("\x1bPsome dcs payload\x1b\\"))
+	s.Write([]byte("!"))
+	got := string(gridText(s)[0])
+	if got != "hi!       " {
+		t.Fatalf("DCS payload leaked into the grid: %q", got)
+	}
+}
+
 func TestPlainTextWrapsAndAdvances(t *testing.T) {
 	s := NewScreen(5, 3)
 	s.Write([]byte("hello"))
